@@ -83,18 +83,23 @@ def interpretar_color(color_hex: str):
     
     color = hex_to_rgb(color_hex)
 
-    # Colores base
-    verde = (0, 255, 0)
-    rojo = (255, 0, 0)
-    amarillo = (255, 255, 0)
+    # Colores base ampliados
+    verdes = [(0, 255, 0), (0, 176, 80), (144, 238, 144)]
+    amarillos = [(255, 255, 0), (255, 230, 0), (255, 255, 153)]
+    rojos = [(255, 0, 0), (192, 0, 0), (255, 102, 102)]
 
-    TOLERANCIA = 100  # rango de cercanía
+    TOLERANCIA = 100  # más alto = más permisivo
 
-    if color_distance(color, verde) < TOLERANCIA:
-        return "HAY STOCK"
-    elif color_distance(color, amarillo) < TOLERANCIA:
-        return "PREGUNTAR"
-    elif color_distance(color, rojo) < TOLERANCIA:
-        return "NO HAY STOCK"
-    else:
-        return "DESCONOCIDO"
+    for verde in verdes:
+        if color_distance(color, verde) < TOLERANCIA:
+            return "HAY STOCK"
+
+    for amarillo in amarillos:
+        if color_distance(color, amarillo) < TOLERANCIA:
+            return "PREGUNTAR"
+
+    for rojo in rojos:
+        if color_distance(color, rojo) < TOLERANCIA:
+            return "NO HAY STOCK"
+
+    return "DESCONOCIDO"
