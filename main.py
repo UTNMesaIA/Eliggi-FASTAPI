@@ -1,16 +1,17 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from typing import List
 from openpyxl import load_workbook
+from fastapi.middleware.cors import CORSMiddleware
 import io
+
 app = FastAPI()
 
-from fastapi.middleware.cors import CORSMiddleware
-
+# CORS config
 origins = [
     "https://utnmesaia.app.n8n.cloud",
-    "https://www.postman.com",  # Para llamadas desde Postman web
-    "http://localhost:3000",     # Si usás frontend local
-    "http://localhost:8000"      # Debug local
+    "https://www.postman.com",
+    "http://localhost:3000",
+    "http://localhost:8000"
 ]
 
 app.add_middleware(
@@ -20,8 +21,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
 
 @app.post("/procesar-excel/")
 async def procesar_excel(
@@ -63,15 +62,39 @@ async def procesar_excel(
 
     return output
 
+# Función: convertir hex a RGB
+def hex_to_rgb(hex_code):
+    if hex_code is None:
+        return None
+    hex_code = hex_code[-6:]  # tomar últimos 6 caracteres
+    r = int(hex_code[0:2], 16)
+    g = int(hex_code[2:4], 16)
+    b = int(hex_code[4:6], 16)
+    return (r, g, b)
+
+# Función: calcular distancia entre colores
+def color_distance(c1, c2):
+    return sum((a - b) ** 2 for a, b in zip(c1, c2)) ** 0.5
+
+# Función: interpretar color por cercanía
 def interpretar_color(color_hex: str):
     if not color_hex:
         return "NO DEFINIDO"
-    color_hex = color_hex.upper()
-    if color_hex.endswith("00FF00"):  # Verde
+    
+    color = hex_to_rgb(color_hex)
+
+    # Colores base
+    verde = (0, 255, 0)
+    rojo = (255, 0, 0)
+    amarillo = (255, 255, 0)
+
+    TOLERANCIA = 100  # rango de cercanía
+
+    if color_distance(color, verde) < TOLERANCIA:
         return "HAY STOCK"
-    elif color_hex.endswith("FFFF00"):  # Amarillo
+    elif color_distance(color, amarillo) < TOLERANCIA:
         return "PREGUNTAR"
-    elif color_hex.endswith("FF0000"):  # Rojo
+    elif color_distance(color, rojo) < TOLERANCIA:
         return "NO HAY STOCK"
     else:
         return "DESCONOCIDO"
