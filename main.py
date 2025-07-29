@@ -2,14 +2,16 @@ from fastapi import FastAPI, UploadFile, File, Form
 from typing import List
 from openpyxl import load_workbook
 import io
+app = FastAPI()
+
 from fastapi.middleware.cors import CORSMiddleware
 
 origins = [
-    "https://utnmesaia.app.n8n.cloud",  # <--- tu dominio de n8n cloud
-    "http://localhost:8000",            # opcional para debug local
+    "https://utnmesaia.app.n8n.cloud",
+    "https://www.postman.com",  # Para llamadas desde Postman web
+    "http://localhost:3000",     # Si usás frontend local
+    "http://localhost:8000"      # Debug local
 ]
-
-app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
