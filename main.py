@@ -5,6 +5,7 @@ import io
 
 app = FastAPI()
 
+# Permitir cualquier origen (ajustalo si querés limitar)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -13,7 +14,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Funciones auxiliares ---
+# -----------------------
+# Funciones auxiliares
+# -----------------------
 
 def hex_to_rgb(hex_code):
     if hex_code is None:
@@ -48,7 +51,9 @@ def interpretar_color(color_hex: str):
 
     return "DESCONOCIDO"
 
-# --- Ruta principal ---
+# -----------------------
+# Ruta principal
+# -----------------------
 
 @app.post("/leer-excel/")
 async def leer_excel(file: UploadFile = File(...)):
@@ -69,14 +74,22 @@ async def leer_excel(file: UploadFile = File(...)):
                     col_name = headers[idx] if idx < len(headers) else f"Col_{idx}"
                     valor = cell.value
 
-                    # Leer color de celda
+                    # Detectar color y estado
                     color = None
-                    if cell.fill and cell.fill.start_color and cell.fill.start_color.rgb:
+                    estado = "NO DEFINIDO"
+                    if (
+                        cell.fill and
+                        cell.fill.start_color and
+                        hasattr(cell.fill.start_color, 'rgb') and
+                        isinstance(cell.fill.start_color.rgb, str)
+                    ):
                         color = cell.fill.start_color.rgb
+                        estado = interpretar_color(color)
 
+                    # Guardar en la fila
                     fila[col_name] = valor
                     fila[f"{col_name}__color"] = color
-                    fila[f"{col_name}__estado"] = interpretar_color(color)
+                    fila[f"{col_name}__estado"] = estado
 
                 hoja_datos.append(fila)
 
