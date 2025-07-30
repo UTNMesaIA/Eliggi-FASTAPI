@@ -18,7 +18,7 @@ app.add_middleware(
 def hex_to_rgb(hex_code):
     if hex_code is None:
         return None
-    hex_code = hex_code[-6:]  # últimos 6 caracteres
+    hex_code = hex_code[-6:]
     return tuple(int(hex_code[i:i+2], 16) for i in (0, 2, 4))
 
 def color_distance(c1, c2):
@@ -52,36 +52,40 @@ def interpretar_color(color_hex: str):
 
 @app.post("/leer-excel/")
 async def leer_excel(file: UploadFile = File(...)):
-    contents = await file.read()
-    wb = load_workbook(io.BytesIO(contents), data_only=True)
+    try:
+        contents = await file.read()
+        wb = load_workbook(io.BytesIO(contents), data_only=True)
 
-    resultado = {}
+        resultado = {}
 
-    for sheet_name in wb.sheetnames:
-        ws = wb[sheet_name]
-        headers = [cell.value for cell in ws[1]]
-        hoja_datos = []
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            headers = [cell.value for cell in ws[1]]
+            hoja_datos = []
 
-        for row in ws.iter_rows(min_row=2):
-            fila = {}
-            for idx, cell in enumerate(row):
-                col_name = headers[idx] if idx < len(headers) else f"Col_{idx}"
-                valor = cell.value
+            for row in ws.iter_rows(min_row=2):
+                fila = {}
+                for idx, cell in enumerate(row):
+                    col_name = headers[idx] if idx < len(headers) else f"Col_{idx}"
+                    valor = cell.value
 
-                # Leer color de celda
-                color = None
-                if cell.fill and cell.fill.start_color and cell.fill.start_color.rgb:
-                    color = cell.fill.start_color.rgb
+                    # Leer color de celda
+                    color = None
+                    if cell.fill and cell.fill.start_color and cell.fill.start_color.rgb:
+                        color = cell.fill.start_color.rgb
 
-                # Agregar campo base
-                fila[col_name] = valor
+                    fila[col_name] = valor
+                    fila[f"{col_name}__color"] = color
+                    fila[f"{col_name}__estado"] = interpretar_color(color)
 
-                # Guardar color y estado SOLO si es la columna de stock (se detectará luego)
-                fila[f"{col_name}__color"] = color
-                fila[f"{col_name}__estado"] = interpretar_color(color)
+                hoja_datos.append(fila)
 
-            hoja_datos.append(fila)
+            resultado[sheet_name] = hoja_datos
 
-        resultado[sheet_name] = hoja_datos
+        return resultado
 
-    return resultado
+    except Exception as e:
+        return {
+            "error": "Error interno al procesar el archivo",
+            "detalle": str(e)
+        }
