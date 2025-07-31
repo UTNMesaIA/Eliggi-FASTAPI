@@ -5,7 +5,6 @@ import io
 
 app = FastAPI()
 
-# Permitir cualquier origen (ajustalo si querés limitar)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -13,10 +12,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# -----------------------
-# Funciones auxiliares
-# -----------------------
 
 def hex_to_rgb(hex_code):
     if hex_code is None:
