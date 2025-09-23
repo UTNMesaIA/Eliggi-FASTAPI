@@ -97,3 +97,30 @@ async def leer_excel(file: UploadFile = File(...)):
             "error": "Error interno al procesar el archivo",
             "detalle": str(e)
         }
+
+        
+from fastapi import FastAPI, UploadFile, File
+import sqlite3
+import pandas as pd
+import tempfile
+
+app = FastAPI()
+
+@app.post("/extract")
+async def extract(file: UploadFile = File(...)):
+    # 1. Guardar archivo temporal
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".sqlite")
+    contents = await file.read()
+    tmp.write(contents)
+    tmp.close()
+
+    # 2. Conectar a SQLite
+    conn = sqlite3.connect(tmp.name)
+    cursor = conn.cursor()
+
+    # 3. Leer tabla productos
+    df = pd.read_sql("SELECT * FROM productos", conn)
+    conn.close()
+
+    # 4. Devolver en JSON
+    return df.to_dict(orient="records")
