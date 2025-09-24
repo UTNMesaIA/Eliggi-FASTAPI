@@ -119,7 +119,7 @@ async def extract(file: UploadFile = File(...)):
     cursor = conn.cursor()
 
     # 3. Leer tabla productos
-    df = pd.read_sql("SELECT * FROM productos", conn)
+    df = pd.read_sql("SELECT * FROM Articulos", conn)
     conn.close()
 
     # 4. Devolver en JSON
