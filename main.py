@@ -124,3 +124,82 @@ async def extract(file: UploadFile = File(...)):
 
     # 4. Devolver en JSON
     return df.to_dict(orient="records")
+
+
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
+import zipfile  # <--- Librería nativa, no requiere instalación
+import os
+import json
+import shutil
+
+@app.post("/procesar-zip-sqlite/")
+async def procesar_zip_sqlite(
+    file: UploadFile = File(...), 
+    codigos: str = Form(...) # Recibimos los códigos como texto JSON: '["COD1", "COD2"]'
+):
+    # Crear carpeta temporal única para esta petición
+    temp_dir = tempfile.mkdtemp()
+    zip_path = os.path.join(temp_dir, "archivo.zip")
+    
+    try:
+        # 1. Convertir el string de códigos a una lista real de Python
+        try:
+            lista_codigos = json.loads(codigos)
+            if not isinstance(lista_codigos, list):
+                raise ValueError
+        except:
+            return {"error": "El campo 'codigos' debe ser un array JSON válido. Ejemplo: ['COD1', 'COD2']"}
+
+        # 2. Guardar el ZIP subido
+        with open(zip_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # 3. Descomprimir el ZIP
+        db_path = None
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                zf.extractall(temp_dir)
+                
+                # Buscar el archivo .sqlite, .db o .sqlite3
+                for filename in zf.namelist():
+                    if filename.endswith(('.sqlite', '.db', '.sqlite3')):
+                        # Construimos la ruta completa (ojo con carpetas dentro del zip)
+                        db_path = os.path.join(temp_dir, filename)
+                        break
+        except zipfile.BadZipFile:
+            return {"error": "El archivo no es un ZIP válido."}
+
+        if not db_path:
+            return {"error": "No encontré ningún archivo .sqlite o .db dentro del ZIP."}
+
+        # 4. Conectar a SQLite y filtrar
+        conn = sqlite3.connect(db_path)
+        
+        # Truco para consulta segura (evita inyección SQL)
+        placeholders = ','.join('?' for _ in lista_codigos)
+        query = f"SELECT * FROM Articulos WHERE Codigo IN ({placeholders})"
+        
+        try:
+            # Pandas lee la SQL y nos devuelve los datos limpitos
+            df = pd.read_sql_query(query, conn, params=lista_codigos)
+            resultado = df.to_dict(orient="records")
+        except Exception as sql_e:
+            return {"error": "Error al consultar la tabla 'Articulos'.", "detalle": str(sql_e)}
+        finally:
+            conn.close()
+
+        return {
+            "mensaje": "Búsqueda exitosa",
+            "encontrados": len(resultado),
+            "datos": resultado
+        }
+
+    except Exception as e:
+        return {"error": "Error interno del servidor", "detalle": str(e)}
+    
+    finally:
+        # 5. Limpieza: Borrar todo lo temporal para no llenar el disco
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+# Comando para correr: python -m uvicorn main:app --reload
