@@ -195,6 +195,30 @@ async def procesar_zip_sqlite(
             "datos": resultado
         }
 
+
+# Modelo flexible o estricto según tus columnas
+class RowData(BaseModel):
+    columna1: Any
+    columna2: Any
+    # ... define tus 6 columnas
+
+def process_data_in_background(data: List[RowData]):
+    # Aquí abres la sesión de DB
+    # Limpias la tabla o preparas el UPSERT
+    # Usas bulk insert de Postgres
+    print(f"Procesando {len(data)} filas en background...")
+    pass
+
+@app.post("/upload-sheet")
+async def upload_sheet(data: List[RowData], background_tasks: BackgroundTasks):
+    # Validamos longitud básica
+    print(f"Recibidas {len(data)} filas.")
+    
+    # Delegamos a background para responder rápido a Google
+    background_tasks.add_task(process_data_in_background, data)
+    
+    return {"message": "Datos recibidos, procesando en segundo plano."}
+
     except Exception as e:
         return {"error": "Error interno del servidor", "detalle": str(e)}
     
