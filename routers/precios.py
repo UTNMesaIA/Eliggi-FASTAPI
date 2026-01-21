@@ -17,6 +17,8 @@ tabla_precios = Table(
     Column("proveedor", String),
     Column("precio_final", Float), # Aquí guardaremos el "C. Final" como número
     Column("marca", String),
+    Column("rubro", String),
+    Column("cod_prov", String),
 )
 
 # Crear la tabla si no existe
@@ -34,6 +36,10 @@ class FilaPrecio(BaseModel):
     
     marca: Optional[str] = Field(alias="Marca", default=None)
 
+    cod_prov: Optional[str] = Field(alias="Cod. Art. P.", default=None)
+
+    rubro: Optional[str] = Field(alias="Rubro", default=None)
+    
     # VALIDADOR 1: Forzar Código a Texto (por si es numérico en Excel)
     @validator('codigo', 'articulo', 'proveedor', 'marca', pre=True)
     def forzar_texto(cls, v):
@@ -75,7 +81,9 @@ def guardar_precios_db(datos: List[FilaPrecio]):
                 "articulo": fila.articulo,
                 "proveedor": fila.proveedor,
                 "precio_final": fila.precio, # Mapeamos al nombre de columna DB
-                "marca": fila.marca
+                "marca": fila.marca,
+                "cod_prov": fila.cod_prov,
+                "rubro": fila.rubro
             })
         
         with db.begin():
