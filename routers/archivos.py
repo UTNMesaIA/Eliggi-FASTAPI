@@ -55,6 +55,7 @@ def color_distance(c1, c2):
 def interpretar_stock_por_valor_y_color(cell):
     val_texto = str(cell.value).strip().upper() if cell.value else ""
     
+    # Prioridad Texto (SI/NO)
     if val_texto in ["SI", "HAY", "STOCK", "DISPONIBLE"]:
         return "HAY STOCK", "TEXTO_SI"
     if val_texto in ["NO", "SIN", "AGOTADO"]:
@@ -66,18 +67,22 @@ def interpretar_stock_por_valor_y_color(cell):
 
     rgb = hex_to_rgb(raw_color)
     if not rgb:
+        # Fallback para colores de tema
+        if raw_color in ["THEME_5", "THEME_9"]: return "CONSULTAR", raw_color
         if raw_color in ["THEME_4", "THEME_8"]: return "HAY STOCK", raw_color
-        if raw_color in ["THEME_5", "THEME_9"]: return "PREGUNTAR", raw_color
         if raw_color in ["THEME_6", "THEME_7"]: return "NO HAY STOCK", raw_color
         return "DESCONOCIDO", raw_color
 
+    # Ajuste de objetivos y orden de detección para evitar falsos verdes
     targets = {
-        "HAY STOCK": [(0, 176, 80), (0, 255, 0), (146, 208, 80), (0, 128, 0)],
-        "PREGUNTAR": [(255, 255, 0), (255, 192, 0), (255, 230, 0), (255, 255, 153)],
+        "CONSULTAR": [(255, 255, 0), (255, 230, 0), (255, 255, 102), (255, 192, 0), (255, 255, 153)],
+        "HAY STOCK": [(0, 176, 80), (0, 255, 0), (146, 208, 80), (0, 128, 0), (0, 255, 153)],
         "NO HAY STOCK": [(255, 0, 0), (192, 0, 0), (255, 102, 102), (255, 199, 206)]
     }
     
-    TOLERANCIA = 150
+    # Tolerancia más ajustada para evitar solapamientos entre amarillo y verde claro
+    TOLERANCIA = 110
+    
     for estado, colores_rgb in targets.items():
         for target_rgb in colores_rgb:
             if color_distance(rgb, target_rgb) < TOLERANCIA:
@@ -99,7 +104,7 @@ async def procesar_inventario_completo(file: UploadFile = File(...)):
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
             
-            # 1. Encontrar la fila de encabezados (buscamos "STOCK" o "CODIGO" en las primeras 5 filas)
+            # 1. Encontrar la fila de encabezados
             header_row_idx = 1
             idx_stock = -1
             idx_codigo = 0
@@ -116,7 +121,7 @@ async def procesar_inventario_completo(file: UploadFile = File(...)):
                         if h in ["CODIGO", "CODIGOS"]: idx_codigo = i
                     break
             
-            if not headers: # Fallback si no encuentra nada en las primeras filas
+            if not headers:
                 headers = [str(c.value).strip().upper() if c.value else f"COL_{i}" for i, c in enumerate(ws[1])]
                 for i, h in enumerate(headers):
                     if h == "STOCK": idx_stock = i
@@ -124,24 +129,20 @@ async def procesar_inventario_completo(file: UploadFile = File(...)):
 
             # 2. Procesar filas de datos
             for row in ws.iter_rows(min_row=header_row_idx + 1):
-                # Extraer valor del código (siempre de la columna detectada o la A)
                 raw_codigo = row[idx_codigo].value
                 if raw_codigo is None or str(raw_codigo).strip() == "":
                     continue
 
                 item = {
                     "ORIGEN_HOJA": sheet_name,
-                    "CODIGO": str(raw_codigo).strip() # Clave estandarizada siempre en singular
+                    "CODIGO": str(raw_codigo).strip()
                 }
 
                 for idx, cell in enumerate(row):
                     if idx >= len(headers): break
                     nombre_col = headers[idx]
-                    
-                    # Guardar el valor original
                     item[nombre_col] = cell.value
 
-                    # Lógica especial de STOCK
                     if idx == idx_stock:
                         estado, raw_info = interpretar_stock_por_valor_y_color(cell)
                         item["STOCK_ESTADO"] = estado
