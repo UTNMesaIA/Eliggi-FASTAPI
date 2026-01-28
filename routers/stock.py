@@ -1,8 +1,14 @@
+import logging
+from typing import List, Optional
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from typing import List, Optional, Any
-from pydantic import BaseModel, Field, validator
-from sqlalchemy import Table, Column, Integer, String, Float
+from pydantic import BaseModel, Field, field_validator, ConfigDict
+from sqlalchemy import Table, Column, Integer, String, Float, UniqueConstraint
+from sqlalchemy.dialects.postgresql import insert
 from database import engine, metadata, SessionLocal
+
+# Configuración de logs
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -11,81 +17,100 @@ tabla_stock = Table(
     "stock_items",
     metadata,
     Column("id", Integer, primary_key=True, index=True),
-    Column("codigo", String),
+    Column("codigo", String, index=True, nullable=False), 
     Column("articulo", String),
-    Column("stock", Float),         
-    Column("stock_minimo", Float),
-    Column("stock_optimo", Float),
-    Column("marca", String),
+    Column("stock", Float, default=0.0),
+    Column("stock_minimo", Float, default=0.0),
+    Column("stock_optimo", Float, default=0.0),
+    Column("marca", String, index=True, nullable=False),
+    # Restricción Única Compuesta
+    UniqueConstraint('codigo', 'marca', name='uix_codigo_marca'),
 )
 
-# Borrar y recrear tabla al iniciar (Opcional, útil en desarrollo)
+# Creación segura de tablas
 try:
-    metadata.drop_all(bind=engine)
     metadata.create_all(bind=engine)
 except Exception as e:
-    print(f"Error reiniciando tabla: {e}")
+    logger.error(f"Error al sincronizar tablas: {e}")
 
 # --- MODELO PYDANTIC ---
-# En routers/stock.py
-
 class FilaExcel(BaseModel):
-    # Definimos los campos con sus alias de Excel
-    codigo: Optional[str] = Field(alias="Código", default=None)
+    model_config = ConfigDict(populate_by_name=True)
+
+    codigo: str = Field(alias="Código")
     articulo: Optional[str] = Field(alias="Artículo", default=None)
-    
-    stock: Optional[float] = Field(alias="Stock", default=0.0)
-    stock_minimo: Optional[float] = Field(alias="Stock Mínimo", default=0.0)
-    stock_optimo: Optional[float] = Field(alias="Stock Optimo", default=0.0)
-    
-    marca: Optional[str] = Field(alias="Marca", default=None)
+    stock: float = Field(alias="Stock", default=0.0)
+    stock_minimo: float = Field(alias="Stock Mínimo", default=0.0)
+    stock_optimo: float = Field(alias="Stock Optimo", default=0.0)
+    marca: str = Field(alias="Marca", default="Sin Marca")
 
-    # --- SOLUCIÓN PARA LOS CÓDIGOS NUMÉRICOS ---
-    # pre=True significa: "Ejecutate ANTES de validar los tipos"
-    @validator('codigo', 'articulo', 'marca', pre=True)
-    def convertir_a_texto(cls, v):
-        if v is None:
-            return None
-        # Si llega 41021 (int) o 41021.0 (float), lo vuelve string "41021"
-        return str(v).replace('.0', '') if isinstance(v, float) and v.is_integer() else str(v)
+    @field_validator('codigo', 'marca', mode='before')
+    @classmethod
+    def limpiar_texto_obligatorio(cls, v):
+        if v is None or str(v).strip() == "":
+            raise ValueError("El campo no puede estar vacío")
+        if isinstance(v, float) and v.is_integer():
+            return str(int(v))
+        return str(v).strip()
 
-    # --- SOLUCIÓN PARA STOCKS (LIMPIEZA) ---
-    @validator('stock', 'stock_minimo', 'stock_optimo', pre=True)
-    def convertir_a_numero(cls, v):
-        if v == "" or v is None:
-            return 0.0
+    @field_validator('articulo', mode='before')
+    @classmethod
+    def limpiar_texto_opcional(cls, v):
+        if v is None: return None
+        return str(v).strip()
+
+    @field_validator('stock', 'stock_minimo', 'stock_optimo', mode='before')
+    @classmethod
+    def limpiar_numeros(cls, v):
+        if v == "" or v is None: return 0.0
         if isinstance(v, str):
             try:
-                # Arregla comas de Excel español (ej: "1,5" -> 1.5)
                 return float(v.replace(',', '.').strip())
             except ValueError:
-                return 0.0 # Si dice "Sin Stock", devuelve 0
+                return 0.0
         return v
 
-    class Config:
-        populate_by_name = True
-
-# --- LÓGICA DE GUARDADO ---
+# --- LÓGICA DE SALTEAR SI EXISTE (ON CONFLICT DO NOTHING) ---
 def procesar_guardado_postgres(datos: List[FilaExcel]):
+    """
+    Inserta datos. Si la combinación codigo+marca ya existe, se saltea la fila.
+    """
     db = SessionLocal()
     try:
-        datos_para_db = []
-        for fila in datos:
-            datos_para_db.append(fila.dict(by_alias=False)) # Usamos los nombres internos (python)
+        listado_dicts = [fila.model_dump(by_alias=False) for fila in datos]
         
+        if not listado_dicts:
+            return
+
+        # Preparamos la inserción masiva
+        stmt = insert(tabla_stock).values(listado_dicts)
+        
+        # CAMBIO CLAVE: .on_conflict_do_nothing()
+        # Si hay conflicto en el índice de codigo y marca, no hace nada.
+        statement_final = stmt.on_conflict_do_nothing(
+            index_elements=['codigo', 'marca']
+        )
+
         with db.begin():
-            db.execute(tabla_stock.delete()) 
-            if datos_para_db:
-                db.execute(tabla_stock.insert(), datos_para_db) 
-        print(f"--- ÉXITO: {len(datos_para_db)} filas guardadas en Postgres ---")
+            result = db.execute(statement_final)
+            # rowcount indicará cuántas filas fueron REALMENTE insertadas
+            logger.info(f"Proceso completado. Nuevas filas insertadas: {result.rowcount}")
+
     except Exception as e:
-        print(f"!!! ERROR CRÍTICO: {e}")
+        logger.critical(f"Error procesando guardado: {e}", exc_info=True)
     finally:
         db.close()
 
 # --- ENDPOINT ---
 @router.post("/upload-sheet")
 async def endpoint_stock(filas: List[FilaExcel], background_tasks: BackgroundTasks):
-    if not filas: raise HTTPException(status_code=400, detail="Vacio")
+    if not filas: 
+        raise HTTPException(status_code=400, detail="No se recibieron datos")
+    
     background_tasks.add_task(procesar_guardado_postgres, filas)
-    return {"message": "Procesando stock en segundo plano"}
+    
+    return {
+        "status": "processing",
+        "count": len(filas),
+        "detail": "Insertando nuevos registros. Los duplicados por Código y Marca serán ignorados."
+    }
