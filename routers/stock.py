@@ -1,4 +1,45 @@
+# routers/stock.py
+import logging
+from typing import List, Optional # <--- IMPORTANTE: List debe estar aquí
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field, field_validator, ConfigDict
+from sqlalchemy import Table, Column, Integer, String, Float, UniqueConstraint
 from sqlalchemy.dialects.postgresql import insert
+from database import engine, metadata, SessionLocal
+
+router = APIRouter()
+
+# --- TABLA ---
+tabla_stock = Table(
+    "stock_items",
+    metadata,
+    Column("id", Integer, primary_key=True, index=True),
+    Column("codigo", String, index=True, nullable=False), 
+    Column("articulo", String),
+    Column("stock", Float, default=0.0),
+    Column("stock_minimo", Float, default=0.0),
+    Column("stock_optimo", Float, default=0.0),
+    Column("marca", String, index=True, nullable=False),
+    UniqueConstraint('codigo', 'marca', name='uix_codigo_marca'),
+)
+
+metadata.create_all(bind=engine)
+
+# --- MODELO ---
+class FilaExcel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    codigo: str = Field(alias="Código")
+    articulo: Optional[str] = Field(alias="Artículo", default=None)
+    stock: float = Field(alias="Stock", default=0.0)
+    stock_minimo: float = Field(alias="Stock Mínimo", default=0.0)
+    stock_optimo: float = Field(alias="Stock Optimo", default=0.0)
+    marca: str = Field(alias="Marca", default="Sin Marca")
+
+    @field_validator('codigo', 'marca', mode='before')
+    @classmethod
+    def limpiar_texto(cls, v):
+        if v is None or str(v).strip() == "": return "S/D"
+        return str(v).strip()
 
 def procesar_guardado_postgres(datos: List[FilaExcel]):
     print("\n" + "═"*60)
