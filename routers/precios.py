@@ -1,16 +1,61 @@
-# --- LÓGICA DE GUARDADO CON LOGS DETALLADOS ---
+from fastapi import APIRouter, HTTPException
+from typing import List, Optional
+from pydantic import BaseModel, Field, validator
+from sqlalchemy import Table, Column, Integer, String, Float
+from database import engine, metadata, SessionLocal
 
+router = APIRouter()
+
+# --- DEFINICIÓN DE TABLA ---
+tabla_precios = Table(
+    "lista_precios",
+    metadata,
+    Column("id", Integer, primary_key=True, index=True),
+    Column("codigo", String),
+    Column("articulo", String),
+    Column("proveedor", String),
+    Column("precio_final", Float),
+    Column("marca", String),
+    Column("rubro", String),
+    Column("cod_prov", String),
+)
+
+metadata.create_all(bind=engine)
+
+# (Tu modelo FilaPrecio se mantiene igual...)
+class FilaPrecio(BaseModel):
+    codigo: Optional[str] = Field(alias="Código", default=None)
+    articulo: Optional[str] = Field(alias="Artículo", default=None)
+    proveedor: Optional[str] = Field(alias="Proveedor", default=None)
+    precio: Optional[float] = Field(alias="C. Final", default=0.0)
+    marca: Optional[str] = Field(alias="Marca", default=None)
+    cod_prov: Optional[str] = Field(alias="Cod. Art. P.", default=None)
+    rubro: Optional[str] = Field(alias="Rubro", default=None)
+
+    @validator('codigo', 'articulo', 'proveedor', 'marca', pre=True)
+    def forzar_texto(cls, v):
+        if v is None: return None
+        return str(v).replace('.0', '') if isinstance(v, float) and v.is_integer() else str(v)
+
+    @validator('precio', pre=True)
+    def limpiar_precio(cls, v):
+        if v == "" or v is None: return 0.0
+        if isinstance(v, str):
+            try:
+                limpio = v.replace('.', '').replace(',', '.')
+                return float(limpio)
+            except: return 0.0
+        return v
+
+# --- LÓGICA SÍNCRONA CON CONSOLE LOGS ---
 def guardar_precios_db(datos: List[FilaPrecio]):
-    print("\n" + "="*50)
-    print(f"🚀 INICIANDO PROCESAMIENTO: {len(datos)} filas recibidas.")
-    print("="*50)
+    print("\n" + "═"*60)
+    print(f"💰 [PRECIOS] Iniciando carga masiva: {len(datos)} artículos.")
     
     db = SessionLocal()
     try:
-        # 1. Preparación de datos
-        print("🛠️  Mapeando datos a formato de base de datos...")
         datos_para_db = []
-        for i, fila in enumerate(datos):
+        for fila in datos:
             datos_para_db.append({
                 "codigo": fila.codigo,
                 "articulo": fila.articulo,
@@ -20,58 +65,36 @@ def guardar_precios_db(datos: List[FilaPrecio]):
                 "cod_prov": fila.cod_prov,
                 "rubro": fila.rubro
             })
-            # Log opcional cada 500 filas para no saturar la consola
-            if (i + 1) % 500 == 0:
-                print(f"   > Procesadas {i + 1} filas...")
-
-        # 2. Operación en Base de Datos
-        print("📂 Conectando a la base de datos para transaccionar...")
-        with db.begin():
-            print("🗑️  Borrando registros antiguos de 'lista_precios'...")
-            resultado_delete = db.execute(tabla_precios.delete())
-            
-            print(f"📥 Insertando {len(datos_para_db)} nuevos registros...")
-            if datos_para_db:
-                db.execute(tabla_precios.insert(), datos_para_db)
         
-        print("✅ TRANSACCIÓN EXITOSA: Datos guardados y confirmados (commit).")
-        print("="*50 + "\n")
+        print("🗑️ [PRECIOS] Vaciando tabla para reemplazo total...")
+        with db.begin():
+            db.execute(tabla_precios.delete()) 
+            if datos_para_db:
+                print(f"📥 [PRECIOS] Insertando nuevos datos...")
+                db.execute(tabla_precios.insert(), datos_para_db) 
+        
+        print(f"✅ [PRECIOS] Éxito: {len(datos_para_db)} filas actualizadas.")
+        print("═"*60 + "\n")
         return len(datos_para_db)
-
     except Exception as e:
-        print(f"❌ ERROR CRÍTICO EN EL PROCESO: {str(e)}")
-        # Aquí la transacción hace rollback automáticamente gracias al 'with db.begin()'
+        print(f"❌ [PRECIOS] ERROR: {e}")
         raise e
     finally:
-        print("🔌 Cerrando conexión a la base de datos.")
         db.close()
 
-# --- ENDPOINT ---
-
+# --- ENDPOINT (Síncrono) ---
 @router.post("/upload-precios")
 async def upload_precios(filas: List[FilaPrecio]):
-    print(f"\n[HTTP POST] Solicitud recibida en /upload-precios")
+    print(f"📩 [HTTP] Recibida carga de precios ({len(filas)} filas)")
     
     if not filas:
-        print("⚠️  Advertencia: Se recibió una lista vacía.")
-        raise HTTPException(status_code=400, detail="La lista enviada está vacía")
+        raise HTTPException(status_code=400, detail="Lista vacía")
     
-    try:
-        # El proceso es síncrono, el código se detiene aquí hasta que guardar_precios_db termine
-        total = guardar_precios_db(filas)
-        
-        print(f"✨ Respuesta enviada al cliente: {total} filas procesadas.")
-        return {
-            "status": "success",
-            "message": f"Base de datos actualizada con éxito.",
-            "detalle": {
-                "registros_insertados": total,
-                "tabla": "lista_precios"
-            }
-        }
-    except Exception as e:
-        # El error ya se printeó en la función anterior, aquí solo respondemos al cliente
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Error interno del servidor: {str(e)}"
-        )
+    # Aquí el servidor se queda esperando hasta que termine el guardado
+    total = guardar_precios_db(filas)
+    
+    return {
+        "status": "success", 
+        "mensaje": "Lista de precios reemplazada",
+        "total": total
+    }
