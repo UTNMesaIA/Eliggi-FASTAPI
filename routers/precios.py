@@ -46,18 +46,41 @@ class FilaPrecio(BaseModel):
             return float(v.replace('.', '').replace(',', '.'))
         return float(v)
 
+from sqlalchemy import text # IMPORTANTE: Asegúrate de tener esta importación arriba
+
 def guardar_precios_db(datos: List[FilaPrecio]):
     print("\n" + "═"*60)
     print(f"💰 [PRECIOS] Procesando {len(datos)} filas.")
     
     db = SessionLocal()
-    batch_size = 1000
     total_afectados = 0
     
-    # MANEJO DE DUPLICADOS EN ENTRADA: Clave es (proveedor, codigo)
+    # --- 🛠️ ESTO ES LO QUE DEBES AGREGAR / MODIFICAR ---
+    try:
+        # 1. Borramos duplicados existentes para permitir la creación del índice
+        sql_limpieza = text("""
+            DELETE FROM lista_precios 
+            WHERE id NOT IN (
+                SELECT MAX(id) 
+                FROM lista_precios 
+                GROUP BY proveedor, codigo
+            );
+        """)
+        db.execute(sql_limpieza)
+        
+        # 2. Creamos el índice único que PostgreSQL necesita para el ON CONFLICT
+        db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uix_prov_cod_precios ON lista_precios (proveedor, codigo);"))
+        db.commit()
+        print("✅ Base de datos limpiada e índice verificado.")
+    except Exception as e:
+        db.rollback()
+        print(f"⚠️ Nota en mantenimiento: {e}")
+    # --------------------------------------------------
+
+    # MANEJO DE DUPLICADOS EN LA ENTRADA (Memoria)
     limpios = {(f.proveedor, f.codigo): f for f in datos}
     datos_lista = list(limpios.values())
-    print(f"🧹 [PRECIOS] De {len(datos)} a {len(datos_lista)} registros únicos por Proveedor-Código.")
+    batch_size = 1000
 
     try:
         for i in range(0, len(datos_lista), batch_size):
@@ -74,9 +97,10 @@ def guardar_precios_db(datos: List[FilaPrecio]):
                     "rubro": f.rubro
                 })
             
+            # Upsert (Insertar o Actualizar)
             stmt = insert(tabla_precios).values(datos_batch)
             statement_upsert = stmt.on_conflict_do_update(
-                index_elements=['proveedor', 'codigo'], # El conflicto se busca en este par
+                index_elements=['proveedor', 'codigo'],
                 set_={
                     "articulo": stmt.excluded.articulo,
                     "precio_final": stmt.excluded.precio_final,
@@ -86,16 +110,92 @@ def guardar_precios_db(datos: List[FilaPrecio]):
                 }
             )
             
-            with db.begin():
-                result = db.execute(statement_upsert)
-                total_afectados += result.rowcount
+            result = db.execute(statement_upsert)
+            db.commit() # Confirmar cada lote
+            
+            total_afectados += (result.rowcount if result.rowcount > 0 else 0)
             print(f"⏳ [PRECIOS] {min(i + batch_size, len(datos_lista))} / {len(datos_lista)}...")
 
         return total_afectados
+    except Exception as e:
+        db.rollback()
+        print(f"❌ ERROR EN GUARDADO: {e}")
+        raise e
     finally:
         db.close()
 
 @router.post("/upload-precios")
 async def upload_precios(filas: List[FilaPrecio]):
-    total = guardar_precios_db(filas)
-    return {"status": "success", "cambios_db": total}
+    try:
+        total = guardar_precios_db(filas)
+        return {"status": "success", "cambios_db": total}
+    except Exception as e:
+        # Esto te dirá el error real en Postman
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ... (tus imports y código anterior)
+
+@router.get("/precios")
+async def obtener_todos_los_precios(limit: int = 100, skip: int = 0):
+    """
+    Retorna la lista de precios con paginación.
+    Uso: /precios?limit=50&skip=0
+    """
+    db = SessionLocal()
+    try:
+        # Construimos la consulta seleccionando todos los campos de la tabla
+        query = select(tabla_precios).offset(skip).limit(limit)
+        result = db.execute(query).mappings().all()
+        
+        return {
+            "total_enviados": len(result),
+            "data": result
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener precios: {str(e)}")
+    finally:
+        db.close()
+
+@router.get("/precios/{codigo}")
+async def obtener_precio_por_codigo(codigo: str, proveedor: Optional[str] = None):
+    """
+    Busca un código específico. 
+    Opcionalmente puedes filtrar por proveedor: /precios/VTH123?proveedor=ZERBINI
+    """
+    db = SessionLocal()
+    try:
+        # Limpiamos el código por si viene con espacios desde la URL
+        codigo_limpio = codigo.strip()
+        
+        query = select(tabla_precios).where(tabla_precios.c.codigo == codigo_limpio)
+        
+        # Si pasan el proveedor por parámetro, filtramos también por él
+        if proveedor:
+            query = query.where(tabla_precios.c.proveedor == proveedor)
+            
+        result = db.execute(query).mappings().all()
+
+        if not result:
+            raise HTTPException(status_code=404, detail=f"Código '{codigo_limpio}' no encontrado")
+
+        return {
+            "busqueda": codigo_limpio,
+            "resultados": result
+        }
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en la búsqueda: {str(e)}")
+    finally:
+        db.close()
+
+@router.get("/debug-columnas")
+async def debug_columnas():
+    from sqlalchemy import inspect
+    inspector = inspect(engine)
+    columnas = inspector.get_columns("lista_precios")
+    indices = inspector.get_indexes("lista_precios")
+    return {
+        "columnas_reales_en_db": [c['name'] for c in columnas],
+        "indices_detectados": indices
+    }
