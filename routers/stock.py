@@ -35,6 +35,15 @@ class FilaExcel(BaseModel):
     # Cambiamos a Any temporalmente en el input para validarlo nosotros
     marca: Optional[str] = Field(alias="Marca", default="Sin Marca")
 
+class StockResponse(BaseModel):
+    id: int
+    codigo: str
+    articulo: Optional[str]
+    stock: float
+    stock_minimo: float
+    stock_optimo: float
+    marca: Optional[str]
+
     @field_validator('codigo', 'marca', mode='before')
     @classmethod
     def forzar_string(cls, v):
@@ -90,5 +99,64 @@ async def endpoint_stock(filas: List[FilaExcel]):
         total = procesar_guardado_postgres(filas)
         return {"status": "success", "cambios": total}
     except Exception as e:
+        print(f"❌ ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/stock", response_model=List[StockResponse])
+async def obtener_todos_stock():
+    """Obtiene todo el stock disponible"""
+    db = SessionLocal()
+    try:
+        resultado = db.execute(tabla_stock.select())
+        items = resultado.fetchall()
+        db.close()
+        
+        if not items:
+            return []
+        
+        return [
+            StockResponse(
+                id=item[0],
+                codigo=item[1],
+                articulo=item[2],
+                stock=item[3],
+                stock_minimo=item[4],
+                stock_optimo=item[5],
+                marca=item[6]
+            )
+            for item in items
+        ]
+    except Exception as e:
+        db.close()
+        print(f"❌ ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/stock/{codigo}", response_model=StockResponse)
+async def obtener_stock_por_codigo(codigo: str):
+    """Obtiene un producto específico por código"""
+    db = SessionLocal()
+    try:
+        resultado = db.execute(tabla_stock.select().where(tabla_stock.c.codigo == codigo))
+        item = resultado.fetchone()
+        db.close()
+        
+        if not item:
+            raise HTTPException(status_code=404, detail=f"Producto '{codigo}' no encontrado")
+        
+        return StockResponse(
+            id=item[0],
+            codigo=item[1],
+            articulo=item[2],
+            stock=item[3],
+            stock_minimo=item[4],
+            stock_optimo=item[5],
+            marca=item[6]
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.close()
         print(f"❌ ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))
